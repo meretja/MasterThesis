@@ -29,15 +29,11 @@ import hmmlearn
 from scipy.stats import ttest_ind
 
 
-
-
-###############################################################################
-###############################################################################
-
-
 """
 Sentiment
 """
+
+# Import sentiment data scraped from Twitter and stored in csv files
 
 path = '/Users/meret/Desktop/Uni/Master_Thesis/Data/sentiment_extraction'
 filenames = glob.glob(path + "/*.csv")
@@ -60,26 +56,28 @@ sentiment_data['created_at'] = pd.to_datetime(sentiment_data['created_at'])
 sentiment_data['date'] = sentiment_data['created_at'].dt.date
 sentiment_data = sentiment_data.drop(columns=['created_at'])
 
+# ----------------------------------------------------------------------------
 
-# Sort confidence_level and potentially exclude any entries below a certain threshold value
+# Sort confidence_level and inspect number of entries below a certain threshold value
 
-# First, check whether there are string values in confidence_level
+# Check whether there are string values in confidence_level
 string_values = sentiment_data['confidence_level'].apply(lambda x: isinstance(x, str))
 
 # RESULT: over a million entries have a string instead of float value 
     # --> convert to float value in order to sort them 
 
-# Use to_numeric() to convert string values to float
+# Convert string values to float
 sentiment_data['confidence_level'] = pd.to_numeric(sentiment_data['confidence_level'], errors='coerce')
 
-# count entries that have confidence level below certain threshold values
+# Count entries that have confidence level below certain threshold values
 below_threshold_fifty = (sentiment_data['confidence_level'] < 0.5).sum()    # sum: 4'871
 below_threshold_seventy = (sentiment_data['confidence_level'] < 0.7).sum()  # sum: 142'281
 below_threshold_ninety = (sentiment_data['confidence_level'] < 0.9).sum()   # sum: 356'948
 
-
+# ----------------------------------------------------------------------------
 
 # Frequency of sentiment scores per day 
+
 negative = sentiment_data[sentiment_data['sentiment_score'] == 'Negative'].groupby(['date', 'ticker'])['sentiment_score'].value_counts().sort_index()
 negative = negative.rename('negative').reset_index()[['date', 'ticker', 'negative']]
 negative = negative.set_index('date')
@@ -97,6 +95,7 @@ sentiment_list = [neutral, negative, positive]
 sentiment = reduce(lambda left,right: pd.merge(left,right,on=['date','ticker'], how='outer'), sentiment_list)
 sentiment.fillna(0, inplace=True)
 
+# ----------------------------------------------------------------------------
 
 # add sentiment-weighted count-based measure
 
@@ -115,23 +114,22 @@ for index, row in sentiment.iterrows():
     sentiment.at[index, 'weighted'] = weighted
     sentiment.at[index, 'weighted_avg'] = weighted_avg
 
-
 """
 Add entries for each ticker 
 --> BRK.B is missing entries for 90 days, in total
 """
+# ----------------------------------------------------------------------------
 
-# group data into individual stocks
+# Check for missing entries (should be 834 in total)
+    # BRK.B shows gaps
+
 sentiment = sentiment.sort_values(by=['ticker', 'date'])
-
 grouped_data = sentiment.groupby('ticker')
 grouped_data.size() # shows that BRK.B has a few entries missing
 
-## BRKB Stock has missing dates which need to be filled
-
 brkb_sentiment = sentiment[sentiment['ticker'] == 'brkb'].iloc[:,:]
 
-# create DataFrame with only the entire 834 dates
+# create DataFrame of 834 dates
 sentiment = sentiment.set_index('date')
 date_range = pd.date_range(start=sentiment.index.min(), end=sentiment.index.max(), freq='D')
 date_df = pd.DataFrame({'date': date_range})
@@ -170,6 +168,7 @@ These values are fixed and not estimated from the data.
 """
 
 # Define the likelihood function for parameter estimation
+
 def kalman_log_likelihood(params, sentiment_scores):
     # Unpack the parameters
     initial_state_mean, initial_state_covariance, observation_covariance, transition_matrices, transition_covariance = params
@@ -186,20 +185,17 @@ def kalman_log_likelihood(params, sentiment_scores):
 
     return -np.sum(log_likelihoods)
 
-# Loop through the grouped data
+# ----------------------------------------------------------------------------
+
+# Loop through the grouped data and add filtered scores to dataframe
+
 for ticker, stock_data in grouped_data:
-    
-    # Perform operations on the subset of data for each stock
-    
-    # OPTIONAL: Check mean of weighted_avg which is a daily value
-    # average_overall_sentiment = stock_data['weighted_avg'].mean()
-    # print(f"Average sentiment for {ticker}: {average_overall_sentiment}")
 
     # Extract the sentiment scores for the current stock
     sentiment_scores = sentiment['weighted_avg'].values
 
     # Estimate the Kalman filter parameters for the current stock using 
-    # Maximum Likelihood Estimation (minimise negative log-likelihood)
+        # Maximum Likelihood Estimation (minimise negative log-likelihood)
         
     initial_guess = (0.0, np.eye(1), np.eye(1), np.eye(1), np.eye(1))  # Initial guess for the parameters
     bounds = ((None, None), (None, None), (None, None), (None, None), (None, None))  # Bounds for the parameters
@@ -222,19 +218,16 @@ for ticker, stock_data in grouped_data:
     
     sentiment['filtered_scores'] = filtered_scores
 
+# ----------------------------------------------------------------------------
 
 ## Plot sentiment for each ticker, individually, for Appendix
 
 sentiment = sentiment.reset_index()
-
-# Get the unique tickers from the dataframe and divide into two groups
 unique_tickers = sentiment['ticker'].unique()
 ticker_groups = np.array_split(unique_tickers, 2)
 
 for group_idx, ticker_group in enumerate(ticker_groups):
-    # Create a new figure for the plot
     fig, axes = plt.subplots(5, 2, figsize=(12, 15))
-    #fig.suptitle(f"Pct Change for Tickers - Group {group_idx+1}")
     
     # Flatten the axes array for easier indexing
     axes = axes.flatten()
@@ -264,8 +257,10 @@ for group_idx, ticker_group in enumerate(ticker_groups):
     
     plt.savefig(f"scores_{group_idx+1}.png")
     plt.show()
+    
+# ----------------------------------------------------------------------------
 
-# Example of TSLA for main text
+# Example of filtered vs. unfiltered scores of TSLA for main text
 
 plt.style.use('seaborn')
 plt.figure(figsize=(12, 6))
@@ -275,6 +270,7 @@ plt.title('Raw vs. Filtered Sentiment Scores - TSLA')
 plt.legend()
 plt.show()
 
+# ----------------------------------------------------------------------------
 
 ## Test statistically significant difference between the two scores
 
@@ -288,9 +284,11 @@ for ticker in grouped_data:
 
     # Perform the appropriate test based on normality results
     if unfiltered_pvalue > 0.05 and filtered_pvalue > 0.05:
+        
         # Perform paired t-test
         _, pvalue = stats.ttest_rel(unfiltered_scores, filtered_scores)
         test_name = "Paired t-test"
+        
     else:
         # Perform Wilcoxon signed-rank test
         _, pvalue = stats.wilcoxon(unfiltered_scores, filtered_scores)
@@ -301,12 +299,12 @@ for ticker in grouped_data:
     print(test_name + " p-value:", pvalue)
     print()
 
+# ----------------------------------------------------------------------------
 
-"""
-Distribution of sentiment scores
-"""
+# Distribution of sentiment scores
 
 # individual tickers
+
 unique_tickers = sentiment['ticker'].unique()
 ticker_groups = np.array_split(unique_tickers, 2)
 
@@ -333,8 +331,8 @@ for group_idx, ticker_group in enumerate(ticker_groups):
     plt.savefig(f"distribution_sentiment_ind_{group_idx+1}.png")
     plt.show()
     
-    
-# mean score
+# Average score
+
 mean_sentiment_score = sentiment.groupby('date')['filtered_scores'].mean().reset_index()
 
 plt.hist(mean_sentiment_score['filtered_scores'], bins=100, color=colors[0], linewidth=0.1)
@@ -342,12 +340,12 @@ plt.title('Distribution of Average Sentiment Scores')
 plt.savefig('distribution_sentiment_avg.png')
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-"""
-Time Series of Scores
-"""
+# Time series of scores
 
 # TSLA positive vs. negative and weighted score
+
 tsla_sentiment = sentiment[sentiment['ticker'] == 'tsla'].iloc[1:,:]
 
 plt.style.use('seaborn')
@@ -367,6 +365,7 @@ plt.legend()
 plt.show()
 
 # LLY positive vs. negative and weighted score
+
 lly_sentiment = sentiment[sentiment['ticker'] == 'lly'].iloc[1:,:]
 
 plt.style.use('seaborn')
@@ -384,7 +383,6 @@ plt.plot(lly_sentiment.date, lly_sentiment.filtered_scores, linewidth=0.3)
 plt.title('Weighted Average of Sentiment - LLY')
 plt.legend()
 plt.show()
-
 
 # Aggregate Data
 
@@ -406,11 +404,9 @@ plt.title('Weighted Average of Aggregate Sentiment')
 plt.legend()
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-
-"""
-Summary of Sentiment Scores
-"""
+# Summary of sentiment scores
 
 # for entire data set
 summary_table = sentiment.describe()
@@ -447,6 +443,8 @@ print(latex_table)
 Robinhood Holdings
 """
 
+# Import data that was loaded from Robintrack website
+
 path = '/Users/meret/Desktop/Uni/Master_Thesis/Data/robinhood/selected_stocks'
 
 filenames = glob.glob(path + "/*.csv")
@@ -474,8 +472,9 @@ robinhood_holdings['ticker'] = robinhood_holdings['ticker'].str.lower()
 # rename brk.b to brkb in robinhood data to match sentiment data
 robinhood_holdings['ticker'] = robinhood_holdings['ticker'].replace('brk.b', 'brkb')
 
+# ----------------------------------------------------------------------------
 
-### Deal with missing entries of BRKB
+# Deal with missing entries of BRKB - again, it is lacking entries
 
 # fill missing entries of brkb with zero
 brkb_holdings = robinhood_holdings[robinhood_holdings['ticker'] == 'brkb'].iloc[:,:]
@@ -501,6 +500,7 @@ robinhood_holdings['date'] = pd.to_datetime(robinhood_holdings['date'])
 robinhood_holdings = robinhood_holdings.sort_values(by=['ticker', 'date'])
 robinhood_holdings = robinhood_holdings.set_index('date')
 
+# ----------------------------------------------------------------------------
 
 # Change in holdings
 
@@ -519,56 +519,44 @@ holdings_change = holdings_change.fillna(0)
 holdings_change = holdings_change.sort_values(by='pct_change')[:-1]
 holdings_change = holdings_change.sort_values(by=['ticker', 'date'])
 
+# ----------------------------------------------------------------------------
 
+# Plot change in holdings 
 
-## Plot change in holdings for each ticker, individually, for Appendix
+# For each ticker, individually, for Appendix
 
-# Get the unique tickers from the dataframe
 unique_tickers = holdings_change['ticker'].unique()
-
-# Divide the tickers into two groups
 ticker_groups = np.array_split(unique_tickers, 2)
 
-# Loop through each ticker group
 for group_idx, ticker_group in enumerate(ticker_groups):
-    # Create a new figure for the plot
-    fig, axes = plt.subplots(5, 2, figsize=(12, 15))
-    #fig.suptitle(f"Pct Change for Tickers - Group {group_idx+1}")
     
-    # Flatten the axes array for easier indexing
+    fig, axes = plt.subplots(5, 2, figsize=(12, 15))
     axes = axes.flatten()
     
-    # Loop through each ticker in the current group
     for idx, ticker in enumerate(ticker_group):
-        # Get the data for the current ticker
         ticker_data = holdings_change[holdings_change['ticker'] == ticker]
         
-        # Plot the pct_change for the current ticker
         ax = axes[idx]
         ax.plot(ticker_data['date'], ticker_data['pct_change'], linewidth=0.5)
         ax.set_title(ticker)
         ax.set_ylabel('Pct Change')
         ax.grid(True)
         
-        # Format x-axis tick labels to display only years
         ax.xaxis.set_major_locator(mdates.YearLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
         plt.setp(ax.xaxis.get_majorticklabels())
     
-    # Set the title of each subplot with the ticker name
     for ax in axes:
         ax.set_title(ax.get_title(), fontsize=10, fontweight='bold')
     
-    # Adjust the layout and spacing of the subplots
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     
-    # Save the plot as an image or display it
     plt.savefig(f"group_{group_idx+1}_tickers.png")
     plt.show()
 
-# illustrate using one example for main section
+# Example of TSLA and LLY for main section
 
-# TSLA -- high variation
+# TSLA 
 tsla_demand = holdings_change[holdings_change['ticker'] == 'tsla'].iloc[1:,:]
 plt.style.use('seaborn')
 plt.figure(figsize=(10, 6))
@@ -577,7 +565,7 @@ plt.title('Change in Holdings of TSLA Stock')
 plt.legend()
 plt.show()
 
-# LLY -- low variation
+# LLY 
 lly_demand = holdings_change[holdings_change['ticker'] == 'lly'].iloc[1:,:]
 plt.style.use('seaborn')
 plt.figure(figsize=(10, 6))
@@ -586,25 +574,7 @@ plt.title('Change in Holdings of LLY Stock')
 plt.legend()
 plt.show()
 
-# plot aggregate changes in holdings 
-
-"""
-aggregate_demand= pd.DataFrame()
-aggregate_demand['pct_change'] = robinhood_holdings.groupby('date')['pct_change'].mean()
-aggregate_demand = aggregate_demand.dropna()
-
-plt.style.use('seaborn')
-plt.figure(figsize=(16, 10))
-plt.plot(aggregate_demand.index, aggregate_demand['pct_change'], label=ticker, linewidth=0.4)
-plt.xlabel('Date')
-plt.ylabel('Change in Holdings')
-plt.title('Change in Holdings over Time')
-plt.show()
-
-"""
-
-
-
+# Aggregate  - not being used in thesis as it looks messy
 
 plt.style.use('seaborn')
 plt.figure(figsize=(16, 10))
@@ -622,13 +592,9 @@ plt.show()
 
 """
 Correlation Analysis
-
-shift the scores by one so that we compute correlation between previous day
-sentiment scores and current day's change in demand
-
 """
 
-# create correlation data
+# Create correlation data
 
 correlation_data = holdings_change.merge(sentiment[['date', 'ticker', 'filtered_scores']], on=['date', 'ticker'])
 # check for NaN --> should be none
@@ -651,8 +617,9 @@ for ticker, group_df in grouped_corr_data:
 shifted_data.isna().sum()
 shifted_data = shifted_data.dropna()
 
+# ----------------------------------------------------------------------------
 
-### Lagged correlation
+# Lagged correlation
 
 # create empty list to store correlation results     
 lagged_correlation_results = []
@@ -673,28 +640,21 @@ for ticker, group in grouped_corr_data:
 lagged_correlation_results = pd.concat(lagged_correlation_results, ignore_index=True)
 lagged_correlation_results = lagged_correlation_results[['date', 'ticker', 'corr_coeff']]
 
-
+# ----------------------------------------------------------------------------
 
 # Plot lagged correlation coefficients over time
 
-# Get the unique tickers from the dataframe
-unique_tickers = lagged_correlation_results['ticker'].unique()
+# Individually for each stock
 
-# Divide the tickers into two groups
+unique_tickers = lagged_correlation_results['ticker'].unique()
 ticker_groups = np.array_split(unique_tickers, 2)
 
-# Loop through each ticker group
 for group_idx, ticker_group in enumerate(ticker_groups):
-    # Create a new figure for the plot
-    fig, axes = plt.subplots(5, 2, figsize=(12, 15))
-    #fig.suptitle(f"Pct Change for Tickers - Group {group_idx+1}")
     
-    # Flatten the axes array for easier indexing
+    fig, axes = plt.subplots(5, 2, figsize=(12, 15))
     axes = axes.flatten()
     
-    # Loop through each ticker in the current group
     for idx, ticker in enumerate(ticker_group):
-        # Get the data for the current ticker
         ticker_data = lagged_correlation_results[lagged_correlation_results['ticker'] == ticker]
         
         # Find the row with maximum correlation coefficient
@@ -708,24 +668,22 @@ for group_idx, ticker_group in enumerate(ticker_groups):
         ax.set_ylabel('Lagged Correlation Coefficient')
         ax.set_xticklabels([])
         
-        # Highlight the row with maximum correlation coefficient
+        # OPTIONAL: Highlight the row with maximum correlation coefficient
         ax.plot(max_corr_index, max_corr_row['corr_coeff'], marker='o', color='red')
         
         ax.grid(True)
     
-    # Set the title of each subplot with the ticker name
     for ax in axes:
         ax.set_title(ax.get_title(), fontsize=10, fontweight='bold')
     
-    # Adjust the layout and spacing of the subplots
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     
-    # Save the plot as an image or display it
     plt.savefig(f"corr_coeff_{group_idx+1}.png")
     plt.show()
 
 
-# example of TSLA 
+# Example of TSLA 
+
 lag_corr_tsla = lagged_correlation_results[lagged_correlation_results['ticker'] == 'tsla']
 max_corr_row_tsla = lag_corr_tsla.loc[lag_corr_tsla['corr_coeff'].idxmax()]
 max_corr_index_tsla = max_corr_row_tsla['date']
@@ -739,18 +697,18 @@ plt.title('Lagged Correlation of Sentiment and Changes in User Holdings - TSLA')
 plt.show()
 
 
-# look at average correlation coefficient
+# Average correlation coefficient
+
 mean_correlations = pd.DataFrame(lagged_correlation_results.groupby('ticker')['corr_coeff'].mean())
 
 plt.hist(lagged_correlation_results['corr_coeff'], bins=100, color=colors[0], linewidth=0.1)
 plt.title('Distribution of Correlation Coefficients Across Stocks')
-#plt.savefig('distribution_sentiment_avg.png')
 plt.show()
 
 
-###############################################################################
-#                               aggregate data
+# ----------------------------------------------------------------------------
 
+# Aggregate data
 
 # create aggregated data frame
 correlation_data_aggr = pd.DataFrame()
@@ -772,6 +730,7 @@ correlation_data_aggr = correlation_data_aggr.reset_index()
 max_corr_row_aggr = correlation_data_aggr.loc[correlation_data_aggr['corr_coeff'].idxmax()]
 max_corr_index_aggr = max_corr_row_aggr['date']
 
+# visualise
 plt.style.use('seaborn')
 plt.figure(figsize=(10, 6))
 plt.plot(correlation_data_aggr['date'], correlation_data_aggr['corr_coeff'], linewidth=1)
@@ -779,19 +738,16 @@ plt.plot(max_corr_index_aggr, max_corr_row_aggr['corr_coeff'], marker='o', color
 plt.title('Lagged Correlation Coefficient Across Stocks')
 plt.show()
 
-
 # descriptive summary
 correlation_data_aggr['corr_coeff'].describe()
 
 plt.hist(correlation_data_aggr['corr_coeff'], bins=100, color=colors[0], linewidth=0.1)
 plt.title('Distribution of Correlation Coefficients Across Stocks')
-#plt.savefig('distribution_sentiment_avg.png')
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-##############################################################################
-
-# HEATMAP
+# Heatmap - not used but good visualisation of coefficients' development
 
 # Reshape the cross-correlation array to have appropriate dimensions
 cross_corr_aggr = cross_corr_aggr.reshape(1, -1)
@@ -809,16 +765,13 @@ freq = 50
 plt.xticks(range(0, len(dates), freq), dates[::freq], rotation=45)
 plt.show()
 
-
-
 ###############################################################################
 ###############################################################################
-
 
 """
 Panel Regression
-
 """
+
 # Import price and volatility of stocks
 
 path = '/Users/meret/Desktop/Uni/Master_Thesis/Data/prices'
@@ -866,9 +819,9 @@ regression_data = pd.merge(correlation_data, stock_data, on=['date', 'ticker'])
 regression_data = regression_data[['date', 'ticker', 'vol_pct_change', 'returns', 'filtered_scores', 'pct_change']]
 
 
-###############################################################################
-                                # Same-day data
-###############################################################################
+# ----------------------------------------------------------------------------
+
+# Same-day data
 
 numeric_index = regression_data.groupby("ticker").date.transform(lambda c: np.arange(len(c)))
 regression_data["numeric_index"] = numeric_index
@@ -882,11 +835,10 @@ fte_results_sameday = fte_model_sameday.fit(cov_type='clustered', cluster_entity
 fte_summary_sameday = fte_results_sameday.summary
 print(fte_summary_sameday.as_latex())
 
-###############################################################################
-                        # Lagged variables by one day
-###############################################################################
+# ----------------------------------------------------------------------------
 
-### Prepare data by shifting independent variables by 1
+# Lagged variables by one day
+    # Prepare data by shifting independent variables by 1
 
 # Group the data by 'ticker'
 regression_data = regression_data.reset_index()
@@ -914,14 +866,13 @@ shifted_panel_data = shifted_panel_data[['date', 'ticker', 'pct_change',
 
 grouped_panel_data = shifted_panel_data.groupby('ticker')
 
+# ----------------------------------------------------------------------------
 
-
-### Panel Regression with lagged variables - Testing different models
+# Panel Regression with lagged variables - Testing different models
 
 numeric_index = shifted_panel_data.groupby("ticker").date.transform(lambda c: np.arange(len(c)))
 shifted_panel_data["numeric_index"] = numeric_index
 shifted_panel_data = shifted_panel_data.set_index(["ticker","numeric_index"])
-
 
 # Fit the fixed effects (FE) model
 fe_model = PanelOLS.from_formula('pct_change ~ 1 + shifted_scores + shifted_returns + shifted_volume + EntityEffects', data=shifted_panel_data)
@@ -935,17 +886,16 @@ te_results = te_model.fit(cov_type='clustered', cluster_entity=True)
 fte_model = PanelOLS.from_formula('pct_change ~ 1 + shifted_scores + shifted_returns + shifted_volume + EntityEffects + TimeEffects', data=shifted_panel_data)
 fte_results = fte_model.fit(cov_type='clustered', cluster_entity=True)
 
-# Use Hausman test to compare the models and assess their appropriateness 
-hausman_test = compare({'FE': fe_results, 'TE': te_results, 'FTE': fte_results})
-print(hausman_test)
+# Use test to compare the models and assess their appropriateness 
+model_comparison = compare({'FE': fe_results, 'TE': te_results, 'FTE': fte_results})
+print(model_comparison)
 
-hausman_summary = hausman_test.summary
-print(hausman_summary.as_latex())
+comparison_summary = model_comparison.summary
+print(comparison_summary.as_latex())
 
 # print output of FTE model for main text
 fte_summary = fte_results.summary
 print(fte_summary.as_latex())
-
 
 
 ###############################################################################
@@ -956,67 +906,10 @@ print(fte_summary.as_latex())
 Hidden Markov Model
 """
 
+# define colours for the subsequent illustrations
 colors = sns.color_palette('Set2', n_colors=3)
 
-"""## Returns
-
-regimes_returns = []
-grouped_stock_data = stock_data.groupby('ticker')
-
-unique_tickers = stock_data['ticker'].unique()
-unique_tickers = np.sort(unique_tickers) 
-
-ticker_groups = np.array_split(unique_tickers, 2)
-
-for group_idx, ticker_group in enumerate(ticker_groups):
-    fig, axes = plt.subplots(5, 2, figsize=(15, 20))
-    axes = axes.flatten()
-    
-    for idx, ticker in enumerate(ticker_group):
-        group = grouped_stock_data.get_group(ticker)
-        
-        X = group['returns'].values.reshape(-1,1)
-        
-        # Build the HMM model, fit to the data and predict hidden states
-        model = hmm.GaussianHMM(n_components = 2, covariance_type = "diag", n_iter = 50, random_state = 42)
-        model.fit(X)
-        Z = model.predict(X)
-        states = pd.unique(Z)
-        
-        temp_df = pd.DataFrame()
-        temp_df['ticker'] = group['ticker']
-        temp_df['date'] = group['date']
-        temp_df['regimes'] = Z
-        regimes_returns.append(temp_df)
-        
-        ax = axes[idx]
-        ax.set_title(f"Regimes of Filtered Returns for {ticker}")
-        
-        # Plot each state's data points
-        for i in states:
-            want = (Z == i)
-            x = group["date"].iloc[want]
-            y = group["returns"].iloc[want]
-            ax.plot(x, y, '.', markersize=8, color=colors[i])
-        
-        ax.legend(states, fontsize=10, loc='upper left', frameon=True)
-        ax.grid(True)
-        ax.set_ylabel("Reshaped Returns", fontsize=10)
-        ax.xaxis.set_tick_params(labelsize=10)
-    
-    for i in range(len(ticker_group), len(axes)):
-        fig.delaxes(axes[i])
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(f"regimes_returns_{group_idx+1}.png")
-    plt.show()
-
-# Create DataFrame containing the regimes
-regimes_returns = pd.concat(regimes_returns, ignore_index=True)
-
-###############################################################################"""
-
-### Sentiment
+# Sentiment
 
 regimes_sentiment = []
 grouped_sentiment_data = sentiment.groupby('ticker')
@@ -1069,10 +962,9 @@ for group_idx, ticker_group in enumerate(ticker_groups):
 
 regimes_sentiment = pd.concat(regimes_sentiment, ignore_index=True)
 
+# ----------------------------------------------------------------------------
 
-###############################################################################
-
-### Holdings Changes
+# Holdings Changes
 
 regimes_holdings = []
 grouped_holdings_data = holdings_change.groupby('ticker')
@@ -1126,10 +1018,9 @@ for group_idx, ticker_group in enumerate(ticker_groups):
 
 regimes_holdings = pd.concat(regimes_holdings, ignore_index=True)
 
+# ----------------------------------------------------------------------------
 
-###############################################################################
-
-### Lagged Correlation Coefficients
+# Lagged Correlation Coefficients
 
 regimes_correlation = []
 grouped_correlation_data = lagged_correlation_results.groupby('ticker')
@@ -1184,7 +1075,6 @@ for group_idx, ticker_group in enumerate(ticker_groups):
 regimes_correlation = pd.concat(regimes_correlation, ignore_index=True)
 
 
-
 ###############################################################################
 ###############################################################################
 
@@ -1196,7 +1086,7 @@ Regimes for aggregated data
 colors = sns.color_palette('Set2', n_colors=3)
 aggr_regimes = pd.DataFrame(dates)
 
-### Sentiment
+# Sentiment
 
 daily_avg_sentiment = sentiment.groupby('date')['filtered_scores'].mean().reset_index()
 
@@ -1213,7 +1103,7 @@ aggr_regimes = aggr_regimes.merge(aggr_regime_sentiment, on='date')
 
 daily_avg_sentiment['regimes'] = aggr_regime_sentiment['sentiment']
 
-# visualise 
+# Visualise 
 
 ax = axes[idx]
 
@@ -1231,11 +1121,9 @@ plt.title("Regimes of Average Daily Filtered Sentiment Scores")
 plt.savefig('regimes_avg_sentiment.png')
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-###############################################################################
-
-### Holdings Changes
-
+# Holdings Changes
 
 daily_avg_holdings = holdings_change.groupby('date')['pct_change'].mean().reset_index()
 
@@ -1252,8 +1140,7 @@ aggr_regimes = aggr_regimes.merge(aggr_regime_holdings, on='date')
 
 daily_avg_holdings['regimes'] = aggr_regime_holdings['holdings']
 
-
-# visualise
+# Visualise
 ax = axes[idx]
 
 for i in states:
@@ -1270,10 +1157,9 @@ plt.title("Regimes of Average Daily Changes in Holdings")
 plt.savefig('regimes_avg_holdings.png')
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-###############################################################################
-
-### Lagged Correlation Coefficients
+# Lagged Correlation Coefficients
 
 daily_avg_correlation = lagged_correlation_results.groupby('date')['corr_coeff'].mean().reset_index()
 
@@ -1290,7 +1176,7 @@ aggr_regimes = aggr_regimes.merge(aggr_regime_correlation, on='date')
 
 daily_avg_correlation['regimes'] = aggr_regime_correlation['correlation']
 
-
+# Visualise
 ax = axes[idx]
 
 for i in states:
@@ -1307,11 +1193,9 @@ plt.title("Regimes of Average Daily Correlation Coefficients")
 plt.savefig('regimes_avg_correlation.png')
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-###############################################################################
-###############################################################################
-
-# combine information on regimes
+# Combine information on regimes
     
 daily_avg_sentiment = daily_avg_sentiment.rename(columns={'regimes': 'regimes_sent'})
 daily_avg_holdings = daily_avg_holdings.rename(columns={'regimes': 'regimes_hold'})
@@ -1319,7 +1203,6 @@ daily_avg_correlation = daily_avg_correlation.rename(columns={'regimes': 'regime
 
 total_regime_data = daily_avg_sentiment.merge(daily_avg_holdings, on='date')
 total_regime_data = total_regime_data.merge(daily_avg_correlation, on='date')
-
 
 # Box plots
 plt.figure(figsize=(10, 6))
@@ -1336,15 +1219,10 @@ plt.ylabel('Changes in User Holdings')
 plt.title('Box Plot of Changes in User Holdings by Regime')
 plt.show()
 
-# plt.figure(figsize=(10, 6))
-# sns.boxplot(x='regimes_corr', y='corr_coeff', data=total_regime_data)
-# plt.xlabel('Regime')
-# plt.ylabel('Correlation Coefficients')
-# plt.title('Box Plot of Correlation Coefficients by Regime')
-# plt.show()
 
+# ----------------------------------------------------------------------------
 
-############### looking into the different states a bit more
+# Look into different regimes a bit more
 
 comparison = pd.pivot_table(total_regime_data, values=['filtered_scores', 'pct_change'], 
                             index=['regimes_sent', 'regimes_hold'], aggfunc=np.mean)
@@ -1356,42 +1234,14 @@ total_regime_data[total_regime_data['regimes_hold'] == 0].mean()
 total_regime_data[total_regime_data['regimes_hold'] == 1].mean()
 
 
-"""# combine pct_change, filtered_scores, and regimes of correlation
-
-regime_analysis = pd.merge(holdings_change, sentiment, on=['date', 'ticker'])
-regime_analysis = regime_analysis[['date', 'ticker', 'pct_change', 'filtered_scores']]
-regime_analysis = pd.merge(regime_analysis, regimes_correlation, on=['date', 'ticker'])
-
-
-# Calculate statistics for each regime state
-regime_stats = regime_analysis.groupby('regimes_correlation').agg({
-    'filtered_scores': ['mean', 'median', 'std'],
-    'pct_change': ['mean', 'median', 'std']
-})
-
-# Print the statistics for each regime state
-print(regime_stats)
-
-# Compare statistics between different regimes
-comparison = pd.pivot_table(regime_analysis, values=['filtered_scores', 'pct_change'], index='regimes_correlation', aggfunc=np.mean)
-
-# Print the comparison of means between regimes
-print(comparison)"""
-
-
-
-
 ###############################################################################
 ###############################################################################
-
 
 """
 Z-Score
-
 """
 
-
-# define function to compute rolling window z-scores
+# Define function to compute rolling window z-scores
 def rollingzscore(x, window):
     r = x.rolling(window=window)
     m = r.mean().shift(1)
@@ -1399,7 +1249,9 @@ def rollingzscore(x, window):
     z = (x-m)/s
     return z
 
-#                           aggregate filtered scores
+# ----------------------------------------------------------------------------
+
+# Aggregate filtered scores
 
 weekly_zScore = rollingzscore(mean_sentiment_score['filtered_scores'], 7)
 weekly_zScore = weekly_zScore.rename('weekly')
@@ -1411,12 +1263,12 @@ aggregate_z_scores['date'] = mean_sentiment_score['date']
 aggregate_z_scores = aggregate_z_scores.set_index('date').reset_index()
 aggregate_z_scores = aggregate_z_scores.dropna()
 
-# describe
+# Describe
 description_overall_zScores = aggregate_z_scores.describe()
 
-# visualise
+# Visualise
 
-# distribution
+# Distribution
 plt.figure(figsize=(10,6))
 plt.hist([aggregate_z_scores['weekly'], aggregate_z_scores['monthly']], label=['Weekly', 'Monthly'], bins=60, color=[colors[0], colors[1]])
 plt.title('Distribution of Aggregate Z-Scores')
@@ -1424,7 +1276,7 @@ plt.legend(fontsize=10, frameon=True)
 plt.savefig("daily_average_zScores_hist.png")
 plt.show()
 
-# time series
+# Time series
 plt.figure(figsize=(10,6))
 plt.plot(aggregate_z_scores.date, aggregate_z_scores['weekly'], label='Weekly', color=colors[0], linewidth=0.7)
 plt.plot(aggregate_z_scores.date, aggregate_z_scores['monthly'], label='Monthly', color=colors[1], linewidth=0.7)
@@ -1433,12 +1285,13 @@ plt.legend(fontsize=10, frameon=True)
 plt.savefig("daily_average_zScores_plot.png")
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-
-#                           individual tickers
+# Individual tickers
 
 # compute z-scores for each ticker, individually
 z_scores_ind = pd.DataFrame()
+sentiment  = sentiment.reset_index()
 
 for ticker in sentiment['ticker'].unique():
     
@@ -1451,8 +1304,15 @@ for ticker in sentiment['ticker'].unique():
 
 z_scores_ind = z_scores_ind.sort_values(by=['ticker', 'date'])
 
+# Summarise
+z_scores_ind_weekly = z_scores_ind[['date', 'ticker', 'z_scores_weekly']].dropna()
+z_scores_ind_monthly = z_scores_ind[['date', 'ticker', 'z_scores_monthly']].dropna()
 
-# visualise using plot
+description_ind_zScores_weekly = z_scores_ind_weekly.groupby('ticker').describe()
+description_ind_zScores_monthly = z_scores_ind_monthly.groupby('ticker').describe()
+
+
+# Visualise using plot
 unique_tickers = z_scores_ind['ticker'].unique()
 ticker_groups = np.array_split(unique_tickers, 2)
 
@@ -1483,7 +1343,6 @@ for group_idx, ticker_group in enumerate(ticker_groups):
     plt.savefig(f"z_scores_{group_idx+1}.png")
     plt.show()
     
-    
 ###############################################################################
 ###############################################################################
 
@@ -1497,7 +1356,7 @@ from statsmodels.tsa.stattools import grangercausalitytests
 
 significance_level = 0.05
 
-# first, check whether data is stationary
+# First, check whether data is stationary
 
 # pct_change
 X = regression_data_aggr['aggr_pct_change'].values
@@ -1507,7 +1366,6 @@ if result[1] <= significance_level:
 elif result[1] > significance_level:
     print("Fail to reject H0, data is not stationary and needs to be transformed.")
 
-    
 # sentiment scores
 X = regression_data_aggr['aggr_scores'].values
 result = adfuller(X)
@@ -1516,10 +1374,9 @@ if result[1] <= significance_level:
 elif result[1] > significance_level:
     print("Fail to reject H0, data is not stationary and needs to be transformed.")
 
-# sentiment
+# ----------------------------------------------------------------------------
 
-#                               aggregated version
-
+# Aggregated version
 
 # Perform the Granger causality test
 granger_result = grangercausalitytests(regression_data_aggr, maxlag=1)
@@ -1531,45 +1388,37 @@ p_value = granger_result[1][0]['ssr_ftest'][1]
 if p_value < significance_level:
     print(f'Lag {i}: p-value = {p_value}')
 
-# visualise 
+# Visualise 
 
 x = regression_data_aggr.index
 y1 = regression_data_aggr['aggr_pct_change']
 y2 = regression_data_aggr['aggr_scores']
 
-# Plot Line1 (Left Y Axis)
 fig, ax1 = plt.subplots(1,1,figsize=(16,9), dpi= 80)
 ax1.plot(x, y1, color=colors[0], label='Holdings Change', linewidth=1.5)
 
-# Plot Line2 (Right Y Axis)
 ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
 ax2.plot(x, y2, color=colors[1], label='Sentiment Score', linewidth=1.5)
 
-# Decorations
-# ax1 (left Y axis)
 ax1.tick_params(axis='x', rotation=0, labelsize=12)
 ax1.set_ylabel('Holdings Change', color=colors[0], fontsize=12)
 ax1.tick_params(axis='y', rotation=0, labelcolor=colors[0])
 ax1.grid(alpha=.4)
 
-# ax2 (right Y axis)
 ax2.set_ylabel("Sentiment Scores", color=colors[1], fontsize=12)
 ax2.tick_params(axis='y', labelcolor=colors[1])
-# ax2.set_xticks(np.arange(0, len(x), 60))
-# ax2.set_xticklabels(x[::60], rotation=90, fontdict={'fontsize':10})
 ax2.set_title("Time Series of Aggregate Holdings Change and Sentiment Scores", fontsize=18)
 fig.tight_layout()
 plt.show()
 
+# ----------------------------------------------------------------------------
 
-#                                  individual stocks
+# Individual stocks
 
-# Get unique tickers
 unique_tickers = regression_data['ticker'].unique()
 
-# Loop through each ticker
 for ticker in unique_tickers:
-    # Filter data for the current ticker
+    
     ticker_data = regression_data[regression_data['ticker'] == ticker]
     
     # Extract the relevant variables
@@ -1592,73 +1441,3 @@ for ticker in unique_tickers:
     print(f"Granger Causality Test for Ticker: {ticker}")
     print(f"Result: {result}")
     print("------------------------------------------")
-
-
-
-###############################################################################
-
-"""# Granger Causality for returns
-
-regression_data
-regression_data_aggr['aggr_returns'] = regression_data.groupby('date')['returns'].mean()
-granger_data_returns = regression_data_aggr.drop(columns=['aggr_scores'])
-
-# Perform the Granger causality test
-granger_result = grangercausalitytests(granger_data_returns, maxlag=1)
-
-# Extract the p-values from the test results
-p_values = [result[0]['ssr_ftest'][1] for result in granger_result.values()]
-
-for i, p_value in enumerate(p_values, start=1):
-    if p_value < significance_level:
-        print(f'Lag {i}: p-value = {p_value}')
-
-
-#                                  individual stocks
-
-# Loop through each ticker
-for ticker in unique_tickers:
-    # Filter data for the current ticker
-    ticker_data = regression_data[regression_data['ticker'] == ticker]
-    
-    # Extract the relevant variables
-    returns = ticker_data['returns']
-    pct_change = ticker_data['pct_change']
-    
-    # Perform the Granger causality test
-    granger_result = grangercausalitytests(np.column_stack((returns, pct_change)), maxlag=1, verbose=False)
-    
-    # Extract the p-value from the test result
-    p_value = granger_result[1][0]['ssr_ftest'][1]
-    
-    # Determine whether to accept or reject the null hypothesis based on the p-value
-    if p_value < significance_level:
-        result = "Reject (There is Granger causality)"
-    else:
-        result = "Accept (There is no Granger causality)"
-    
-    # Print the result for the current ticker
-    print(f"Granger Causality Test for Ticker: {ticker}")
-    print(f"Result: {result}")
-    print("------------------------------------------")
-"""
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
