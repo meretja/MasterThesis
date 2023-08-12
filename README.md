@@ -1,4 +1,4 @@
-# Master Thesis
+# Master Thesis Code
 Python Code related to the Master thesis on "Sentiment-Driven Behaviour of Retail Investors"
 
 Submitted: August 2023
