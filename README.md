@@ -1,2 +1,5 @@
-# MasterThesis
-Python Code of Master Thesis on "Sentiment-Driven Behaviour of Retail Investors", Submitted August 2023
+# Master Thesis
+Python Code corresponding to the Master thesis on "Sentiment-Driven Behaviour of Retail Investors"
+
+Submitted: August 2023
+Author: Meret Vivianne Jaggi
